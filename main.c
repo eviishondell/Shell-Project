@@ -1,473 +1,197 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <signal.h>
-#include <limits.h>
-#include <errno.h>
 
-//define the constants
-
-#define CMD_HISTORY_SIZE 10
-
-//declare the variables
-
-char *history_cmd[CMD_HISTORY_SIZE];
-
-int cmd_history_count = 0;
-
-//Implement the method to execute each command of unix
-
-static void execute_command(const char * inputline)
-
-{
-  char * command = strdup(inputline);
-
-  char *args[10];
-  
-  int argc = 0;
-  
-  args[argc++] = strtok(command, " ");
-  
-  while (args[argc - 1] != NULL)
-  {
-
-    args[argc++] = strtok(NULL, " ");
-
-  }
-
-argc--;
-
-int background = 0;
-
-if (strcmp(args[argc - 1], "&") == 0) {
-
-background = 1;
-
-args[--argc] = NULL;
-
-}
-
-int fd[2] = { -1, -1 };
-
-while (argc >= 3)
-
-{
-
-if (strcmp(args[argc - 2], ">") == 0)
-
-{
-
-fd[1] = open(args[argc - 1], O_CREAT | O_WRONLY |
-
-O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-
-if (fd[1] == -1)
-
-{
-
-perror("open");
-
-free(command);
-
-return;
-
-}
-
-args[argc - 2] = NULL;
-
-argc -= 2;
-
-}
-
-else if (strcmp(args[argc - 2], "<") == 0)
-
-{
-
-fd[0] = open(args[argc - 1], O_RDONLY);
-
-if (fd[0] == -1) {
-
-perror("open");
-
-free(command);
-
-return;
-
-}
-
-args[argc - 2] = NULL;
-
-argc -= 2;
-
-}
-
-else {
-
-break;
-
-}
-
-}
-
-int status;
-
-//create child process
-
-pid_t pid = fork();
-
-switch (pid) {
-
-case -1:
-
-perror("fork");
-
-break;
-
-case 0:
-
-if (fd[0] != -1)
-
-{
-
-if (dup2(fd[0], STDIN_FILENO) != STDIN_FILENO)
-
-{
-
-perror("dup2");
-
-exit(1);
-
-}
-
-}
-
-if (fd[1] != -1) {
-
-if (dup2(fd[1], STDOUT_FILENO) != STDOUT_FILENO) {
-
-perror("dup2");
-
-exit(1);
-
-}
-
-}
-
-execvp(args[0], args);
-
-perror("execvp");
-
-exit(0);
-
-default:
-
-close(fd[0]); close(fd[1]);
-
-if (!background)
-
-waitpid(pid, &status, 0);
-
-break;
-
-}
-
-free(command);
-
-}
-
-//implement method add the commandn history after each run
-
-static void add_to_history(const char * command) {
-
-if (cmd_history_count == (CMD_HISTORY_SIZE - 1)) {
-
-int i;
-
-free(history_cmd[0]);
-
-for (i = 1; i < cmd_history_count; i++)
-
-history_cmd[i - 1] = history_cmd[i];
-
-cmd_history_count--;
-
-}
-
-history_cmd[cmd_history_count++] = strdup(command);
-
-}
-
-//Implement method to run the each command
-
-static void run_from_history(const char * command)
-
-{
-
-int count = 0;
-
-if (cmd_history_count == 0)
-
-{
-
-printf("No commands in history\n");
-
-return;
-
-}
-
-if (command[1] == '!')
-
-count = cmd_history_count - 1;
-
-else {
-
-count = atoi(&command[1]) - 1;
-
-if ((count < 0) || (count > cmd_history_count)) {
-
-fprintf(stderr, "No such command in history.\n");
-
-return;
-
-}
-
-}
-
-printf("%s\n", command);
-
-execute_command(history_cmd[count]);
-
-}
-
-//Implement the method for the history command
-
-static void list_history()
-
-{
-
-int i;
-
-for (i = cmd_history_count - 1; i >= 0; i--)
-
-{
-
-printf("%i %s\n", i + 1, history_cmd[i]);
-
-}
-
-}
-
-//For each command signal handler
-
-static void signal_handler(const int runcommand)
-
-{
-
-switch (runcommand)
-
-{
-
-case SIGTERM:
-
-case SIGINT:
-
-break;
-
-case SIGCHLD:
-
-while (waitpid(-1, NULL, WNOHANG) > 0);
-
-break;
-
-}
-
-}
-
-//main method
 #define MAX_COMMAND_LINE_LEN 1024
 #define MAX_COMMAND_LINE_ARGS 128
+#define PATH_MAX 4096
+#define MAX_ENV_VARIABLE_NAME_LENGTH 64
+#define MAX_ENV_VARIABLE_VALUE_LENGTH 1024
 
-char prompt[] = ">";
+
+char prompt[] = "> ";
 char delimiters[] = " \t\r\n";
 extern char **environ;
 
+void cancelHandler(int signum) {
+	printf("\n");
+}
 
+void handler(int signum)//signal handler
+{ 
+	exit(0);
+}
 
-int main(int argc, char *argv[])
-
-{
-   char command_line[MAX_COMMAND_LINE_LEN];
+int main() {
+    // Store string in command line.
+    char command_line[MAX_COMMAND_LINE_LEN];
     char cmd_bak[MAX_COMMAND_LINE_LEN];
-
-
-    getcwd(command_line, MAX_COMMAND_LINE_LEN);
-
-      
+		char cwd[PATH_MAX];
+  
     // Stores the tokenized command line input.
     char *arguments[MAX_COMMAND_LINE_ARGS];
-   
+    	
+    while (true) {
+			memset(arguments, 0, MAX_COMMAND_LINE_ARGS);
+      
+        do{ 
+            // Print the shell prompt.
+						getcwd(cwd, sizeof(cwd));
+            printf("%s%s", cwd, prompt);
+            fflush(stdout);
 
-//This for command implementations
+            // Read input from stdin and store it in command_line. If there's an
+            // error, exit immediately. (If you want to learn more about this line,
+            // you can Google "man fgets")
+        
+            if ((fgets(command_line, MAX_COMMAND_LINE_LEN, stdin) == NULL) && ferror(stdin)) {
+                fprintf(stderr, "fgets error");
+                exit(0);
+            }
+ 
+        }while(command_line[0] == 0x0A);  // while just ENTER pressed
 
-struct sigaction act, act_old;
+      
+        // If the user input was EOF (ctrl+d), exit the shell.
+        if (feof(stdin)) {
+            printf("\n");
+            fflush(stdout);
+            fflush(stderr);
+            return 0;
+        }        
+			  // 0. Modify the prompt to print the current working directory
 
-act.sa_handler = signal_handler;
-
-act.sa_flags = 0;
-
-sigemptyset(&act.sa_mask);
-
-if ((sigaction(SIGINT, &act, &act_old) == -1) ||
-
-(sigaction(SIGCHLD, &act, &act_old) == -1))
-
-{
-
-perror("signal");
-
-return 1;
-
+        // 1. Tokenize the command line input (split it on whitespace)
+				command_line[strlen(command_line) -1] = '\0'; // this removes the last new character at the end of the input string
+				int i = 0;
+				bool verify = false;
+				int argcount = 0;
+				char* input = strtok(command_line, delimiters);
+				char copy[MAX_COMMAND_LINE_LEN];
+				char retrieveVal[MAX_COMMAND_LINE_LEN];
+				char* next;
+				while (true){
+						if(input != NULL){
+							if (input[0] == '$' && strlen(input) > 1 && argcount > 0){
+								strcpy(copy, input + 1);
+								verify = true;
+								char* envVal = getenv(copy);
+								if (envVal == NULL){
+										strcpy(retrieveVal, "");
+								}
+								else{
+									strcpy(retrieveVal, envVal);
+								}
+							}
+						next = (char*) malloc(MAX_COMMAND_LINE_LEN * sizeof(char));
+						strcpy(next, verify ? retrieveVal : input);
+						arguments[i++] = next;
+						input = strtok(NULL, delimiters);
+						++argcount; 
+				}
+				else{
+					break;
+				}
+			}    
+        // 2. Implement Built-In Commands
+				if (strcmp(arguments[0], "echo") == 0){
+					int index;
+					for (index = 1; index < argcount; ++index){
+						if(index > 1){
+							printf(" ");
+						}
+						printf("%s", arguments[index]);
+					}
+					printf("\n");
+				}
+				else if (strcmp(arguments[0], "pwd") == 0){
+					printf("%s\n", cwd);
+				}
+				else if (strcmp(arguments[0], "cd") == 0){
+					if (arguments[1] == NULL){
+						chdir(getenv("HOME"));
+					}
+					else{
+						chdir(arguments[1]);
+						}
+					}
+				else if (strcmp(arguments[0], "exit") == 0){
+					exit(0);
+				}
+				else if (strcmp(arguments[0], "setenv") == 0){
+					char name[MAX_ENV_VARIABLE_NAME_LENGTH];
+					char value[MAX_ENV_VARIABLE_VALUE_LENGTH];
+					char* p = strtok(arguments[1], "=");
+					strcpy(name, p);
+					while (p != NULL) {
+						strcpy(value, p);
+						p = strtok(NULL, "=");
+					}
+					setenv(name, value, 1);
+				}	
+				else if (strcmp(arguments[0], "env") == 0) {
+					if (argcount == 1) {
+						char ** envs = environ;
+						for (;* envs; envs++) {
+							printf("%s\n", * envs);
+						}
+					} else {
+						char * env_value = getenv(arguments[1]);
+						if (env_value != NULL) {
+							printf("%s\n", env_value);
+						}
+				}
+      }
+        // 3. Create a child process which will execute the command line input
+				else{
+					pid_t  pid;
+     			pid = fork();
+					char* cmd = arguments[0];
+					int background = 0;
+					if (strcmp(arguments[argcount - 1], "&") == 0){
+						arguments[argcount - 1] = NULL;
+						background = 1;
+					}
+					if (pid == 0){
+						signal(SIGALRM,handler);
+						alarm(10);
+						if (background){
+						int fd = open("/dev/null", O_WRONLY);
+						dup2(fd, STDOUT_FILENO);
+						dup2(fd, STDERR_FILENO);
+					}
+					if (execvp(cmd, arguments) == -1){
+					  printf("execvp() failed: No such file or directory. An error occurred\n");
+					}
+					alarm(0);
+					exit(0);
+				}
+					else {
+						if (background == 0){
+							signal(SIGINT,cancelHandler);
+							waitpid(pid, NULL, WUNTRACED);
+						}
+					}
+    }
+        // 4. The parent process should wait for the child to complete unless its a background process
+        // Hints (put these into Google):
+        // man fork
+        // man execvp
+        // man wait
+        // man strtok
+        // man environ
+        // man signals
+        
+        // Extra Credit
+        // man dup2
+        // man open
+        // man pipes
+    }
+    // This should never be reached.
+    return -1;
 }
-
-size_t line_size = 100;
-
-char * line = (char*)malloc(sizeof(char)*line_size);
-
-if (line == NULL)
-
-{
-
-perror("malloc");
-
-return 1;
-
-}
-
-int flag = 0;
-
-int should_run = 1;
-
-while (should_run)
-
-{
-
-if (!flag)
-  printf("%s", command_line);
-  printf(" ");
-  printf(prompt);
-  fflush(stdout);
-// printf("CSC13120 > ");
-
-// fflush(stdout);
-
-if (getline(&line, &line_size, stdin) == -1)
-
-{
-
-if (errno == EINTR)
-
-{
-
-clearerr(stdin);
-
-flag = 1;
-
-continue;
-
-}
-
-perror("getline");
-
-break;
-
-}
-
-flag = 0;
-
-int line_len = strlen(line);
-
-if (line_len == 1)
-
-{
-
-continue;
-
-}
-  #define TAM 1000 
-    char buf[TAM];
-    char  *gdir;
-    char  *dir;
-    char  *to;
-// if (strcmp(argv[0], "cd")==0){
-
-        //     gdir = getcwd(buf, sizeof(buf));
-        //     dir = strcat(gdir, "/");
-        //     to = strcat(dir, argv[1]);
-
-        //     chdir(to);
-        //     continue;
-        //     //printf("Acceso a la carpeta realizado\n");
-
-        // }            
-  // if(argv[0] == "cd"){
-  //    int chdir(const char *path);
-  //  char s[100];
-  //  // Printing the current working directory
-  //   getcwd(s,100);
-  // //  Changing the current working directory to the previous directory
-  //   chdir("..");
-  //  // Printing the now current working directory
-  //   getcwd(s,100);
-  
-  // }
-
-line[line_len - 1] = '\0';
-
-if (strcmp(line, "exit") == 0)
-
-{
-
-break;
-
-}
-
-else if (strcmp(line, "history") == 0) {
-
-list_history();
-
-}
-
-else if (line[0] == '!')
-
-{
-
-run_from_history(line);
-
-}
-// extern char **environ;
-// else if ()
-
-else
-
-{
-
-add_to_history(line);
-
-execute_command(line);
-
-}
-
-}
-
-free(line);
-
-return 0;
-
-}
-
